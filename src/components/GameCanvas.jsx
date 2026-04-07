@@ -8,7 +8,7 @@ const TILE_SIZE = 12; // PC 해상도에 맞춰 약간 키움
 const WORLD_WIDTH = 2500;
 const WORLD_HEIGHT = 2000;
 
-const GameCanvas = ({ user }) => {
+const GameCanvas = ({ user, isMobile }) => {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [leaderboard, setLeaderboard] = useState([]);
@@ -21,9 +21,17 @@ const GameCanvas = ({ user }) => {
     y: user.isAdmin ? WORLD_HEIGHT / 2 : Math.floor((Math.random() * WORLD_HEIGHT)/TILE_SIZE) * TILE_SIZE 
   });
 
+  const keysRef = useRef({ ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, a: false, s: false, d: false });
+
   const syncPositionToFirebase = useRef(
     throttle((pos) => {
-      update(ref(db, `players/${user.uid}`), { x: pos.x, y: pos.y });
+      update(ref(db, `players/${user.uid}`), { 
+        uid: user.uid,
+        nickname: user.nickname,
+        color: user.color,
+        x: pos.x, 
+        y: pos.y 
+      }).catch(() => {});
     }, 100)
   ).current;
 
@@ -45,7 +53,7 @@ const GameCanvas = ({ user }) => {
     window.addEventListener('resize', handleResize);
     setTimeout(handleResize, 100);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [isMobile]);
 
   useEffect(() => {
     let myPlayerRef = null;
@@ -95,14 +103,13 @@ const GameCanvas = ({ user }) => {
   }, [user.uid, user.isAdmin]);
 
   useEffect(() => {
-    const keys = {};
     const handleKeyDown = (e) => { 
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault();
       }
-      keys[e.key] = true; 
+      keysRef.current[e.key] = true; 
     };
-    const handleKeyUp = (e) => { keys[e.key] = false; };
+    const handleKeyUp = (e) => { keysRef.current[e.key] = false; };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
@@ -112,6 +119,7 @@ const GameCanvas = ({ user }) => {
       let moved = false;
       const speed = user.isAdmin ? TILE_SIZE * 3 : TILE_SIZE;
       const newPos = { ...myPos.current };
+      const keys = keysRef.current;
       
       if ((keys['w'] || keys['ArrowUp']) && newPos.y > 0) { newPos.y -= speed; moved = true; }
       else if ((keys['s'] || keys['ArrowDown']) && newPos.y < WORLD_HEIGHT - TILE_SIZE) { newPos.y += speed; moved = true; }
@@ -216,9 +224,9 @@ const GameCanvas = ({ user }) => {
 
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       
-      const minimapSize = 180;
+      const minimapSize = isMobile ? 120 : 180;
       const minimapScale = minimapSize / Math.max(WORLD_WIDTH, WORLD_HEIGHT);
-      const padding = 24;
+      const padding = isMobile ? 12 : 24;
       const mmX = padding;
       const mmY = canvas.height - minimapSize - padding;
 
@@ -262,18 +270,55 @@ const GameCanvas = ({ user }) => {
 
     renderRafId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(renderRafId);
-  }, []);
+  }, [isMobile]);
+
+  const handleTouch = (e) => {
+    if (!isMobile || user.isAdmin) return;
+    // prevent default behavior like scrolling
+    if (e.cancelable) e.preventDefault(); 
+    
+    if (e.type === 'touchend' || e.touches.length === 0) {
+      keysRef.current.w = keysRef.current.s = keysRef.current.a = keysRef.current.d = false;
+      return;
+    }
+
+    const touch = e.touches[0];
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    const dx = x - centerX;
+    const dy = y - centerY;
+
+    keysRef.current.w = keysRef.current.s = keysRef.current.a = keysRef.current.d = false;
+
+    // 대각선을 기준으로 영역 분할
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (dx > 0) keysRef.current.d = true;
+      else keysRef.current.a = true;
+    } else {
+      if (dy > 0) keysRef.current.s = true;
+      else keysRef.current.w = true;
+    }
+  };
 
   return (
     <div ref={containerRef} style={{ flex: 1, backgroundColor: '#000', overflow: 'hidden', position: 'relative' }}>
       <canvas 
         ref={canvasRef} 
-        style={{ display: 'block', outline: 'none' }}
+        style={{ display: 'block', outline: 'none', touchAction: 'none' }}
         tabIndex={0}
+        onTouchStart={handleTouch}
+        onTouchMove={handleTouch}
+        onTouchEnd={handleTouch}
+        onTouchCancel={handleTouch}
       />
       
       {/* Floating Leaderboard */}
-      <div className="panel" style={{ position: 'absolute', top: 16, right: 16, width: 200, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
+      <div className="panel" style={{ position: 'absolute', top: isMobile ? 8 : 16, right: isMobile ? 8 : 16, width: isMobile ? 160 : 200, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
         <div className="panel-header" style={{ padding: '10px 16px', fontSize: '0.85rem' }}>
           <span>실시간 순위 🏆</span>
         </div>
@@ -294,8 +339,10 @@ const GameCanvas = ({ user }) => {
       </div>
 
       {!user.isAdmin && (
-        <div style={{ position: 'absolute', bottom: 24, right: 24, pointerEvents: 'none', textAlign: 'right' }}>
-          <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 2 }}>Arrow Keys or WASD to Move</p>
+        <div style={{ position: 'absolute', bottom: isMobile ? 12 : 24, right: isMobile ? 12 : 24, pointerEvents: 'none', textAlign: 'right' }}>
+          <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 2 }}>
+            {isMobile ? 'Touch screen to move' : 'Arrow Keys or WASD to Move'}
+          </p>
         </div>
       )}
     </div>

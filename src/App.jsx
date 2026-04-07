@@ -5,6 +5,12 @@ import GameCanvas from './components/GameCanvas';
 import Chat from './components/Chat';
 import './index.css';
 
+const PALETTE_COLORS = Array.from({ length: 100 }, (_, i) => {
+  const hue = (i % 10) * 36;
+  const lightness = 20 + Math.floor(i / 10) * 6; // 20% to 74%
+  return `hsl(${hue}, 80%, ${lightness}%)`;
+});
+
 function App() {
   const [user, setUser] = useState(null); // { uid, nickname, color, status }
   const [inputName, setInputName] = useState('');
@@ -19,6 +25,39 @@ function App() {
   const [isPasswordSet, setIsPasswordSet] = useState(false);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+
+  // 모바일 뷰 관련 상태
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768 || /Mobi|Android/i.test(navigator.userAgent));
+  // 색상 선택 관련 상태
+  const [selectedColor, setSelectedColor] = useState(PALETTE_COLORS[0]);
+  const [usedColors, setUsedColors] = useState(new Set());
+
+  // 사용 중인 색상 실시간 추적 (로그인 화면용)
+  useEffect(() => {
+    if (user || adminMode) return;
+    
+    const handleSnap = (snap) => {
+      const newUsed = new Set();
+      if (snap.exists()) {
+         Object.values(snap.val()).forEach(u => u.color && newUsed.add(u.color));
+      }
+      return newUsed;
+    };
+    
+    let appColors = new Set();
+    let playColors = new Set();
+    
+    const unsubApp = onValue(ref(db, 'approvals'), snap => {
+      appColors = handleSnap(snap);
+      setUsedColors(new Set([...appColors, ...playColors]));
+    });
+    const unsubPlay = onValue(ref(db, 'players'), snap => {
+      playColors = handleSnap(snap);
+      setUsedColors(new Set([...appColors, ...playColors]));
+    });
+    
+    return () => { unsubApp(); unsubPlay(); };
+  }, [user, adminMode]);
 
   useEffect(() => {
     const configRef = ref(db, 'config/resetTimer');
@@ -81,7 +120,6 @@ function App() {
     });
 
     if (adminMode) {
-      // 승인 대기열 리스너
       const approvalsRef = ref(db, 'approvals');
       const unsubscribeApprovals = onValue(approvalsRef, (snapshot) => {
         if (snapshot.exists()) {
@@ -93,7 +131,6 @@ function App() {
         }
       });
 
-      // 현재 접속자 리스너
       const playersRef = ref(db, 'players');
       const unsubscribePlayers = onValue(playersRef, (snapshot) => {
         if (snapshot.exists()) {
@@ -122,12 +159,13 @@ function App() {
             setUser(prev => ({ ...prev, status: 'approved' }));
           }
         } else {
-          // 유저 데이터가 삭제된 경우 (강퇴 또는 거절)
           setUser(null);
           if (user.status === 'approved') {
             alert("관리자에 의해 강제 퇴장되었습니다.");
+            window.location.reload();
           } else {
             alert("접속이 거절되었습니다.");
+            window.location.reload();
           }
         }
       });
@@ -149,9 +187,13 @@ function App() {
       return;
     }
 
-    const randomColor = `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)`;
+    if (usedColors.has(selectedColor)) {
+      alert("이미 누군가 사용 중인 색상입니다. 다른 색상을 골라주세요.");
+      return;
+    }
+
     const uid = 'uid_' + Math.random().toString(36).substr(2, 9);
-    const newUser = { uid, nickname: name, color: randomColor, status: 'pending' };
+    const newUser = { uid, nickname: name, color: selectedColor, status: 'pending' };
     
     set(ref(db, `approvals/${uid}`), newUser)
       .then(() => {
@@ -220,7 +262,7 @@ function App() {
 
         <div className="main-container">
           <div className="game-area">
-            <GameCanvas user={adminUser} />
+            <GameCanvas user={adminUser} isMobile={false} />
           </div>
           
           <aside className="sidebar">
@@ -316,12 +358,51 @@ function App() {
   if (!user) {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
-        <form onSubmit={handleLogin} className="panel" style={{ padding: 40, width: 360, gap: 24 }}>
+        <div className="panel" style={{ padding: 40, width: 440, gap: 20 }}>
           <div style={{ textAlign: 'center' }}>
             <h1 style={{ fontSize: '2rem', marginBottom: 8, background: 'linear-gradient(to right, #60a5fa, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>PIXEL WARS</h1>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>픽셀로 영토를 확장하세요!</p>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          
+          <div className="device-toggle">
+            <button 
+              type="button" 
+              className={!isMobile ? "active" : ""} 
+              onClick={() => setIsMobile(false)}
+            >
+              💻 PC 최적화
+            </button>
+            <button 
+              type="button" 
+              className={isMobile ? "active" : ""} 
+              onClick={() => setIsMobile(true)}
+            >
+              📱 모바일 최적화
+            </button>
+          </div>
+
+          <div>
+            <p style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-muted)' }}>캐릭터 색상 선택 (나만의 색상)</p>
+            <div className="color-grid">
+              {PALETTE_COLORS.map(color => {
+                const isUsed = usedColors.has(color);
+                const isSelected = selectedColor === color;
+                return (
+                  <div 
+                    key={color}
+                    className={`color-swatch ${isSelected ? 'selected' : ''} ${isUsed ? 'disabled' : ''}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => {
+                      if (!isUsed) setSelectedColor(color);
+                    }}
+                    title={isUsed ? "사용중" : "선택 가능"}
+                  ></div>
+                );
+              })}
+            </div>
+          </div>
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
             <input 
               type="text" 
               placeholder="닉네임 입력" 
@@ -329,10 +410,12 @@ function App() {
               onChange={e => setInputName(e.target.value)} 
               autoFocus 
             />
-            <button type="submit" style={{ width: '100%', padding: 14, fontSize: '1rem' }}>접속 요청하기</button>
-          </div>
+            <button type="submit" style={{ width: '100%', padding: 14, fontSize: '1rem' }}>
+              접속 요청하기
+            </button>
+          </form>
           <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>관리자 승인 후 입장이 가능합니다.</p>
-        </form>
+        </div>
       </div>
     );
   }
@@ -358,20 +441,20 @@ function App() {
           <span>PIXEL WARS</span>
         </div>
         
-        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(255,255,255,0.05)', padding: '6px 16px', borderRadius: 20, border: '1px solid var(--border-color)' }}>
+        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(255,255,255,0.05)', padding: '6px 16px', borderRadius: 20, border: '1px solid var(--border-color)', visibility: isMobile ? 'hidden' : 'visible' }}>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>리셋까지</span>
           <strong style={{ fontSize: '1rem', color: 'white', fontFamily: 'monospace' }}>{timeLeft}</strong>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>접속 중: <strong>{user.nickname}</strong></span>
+          {!isMobile && <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>접속 중: <strong>{user.nickname}</strong></span>}
           <button onClick={() => window.location.reload()} className="secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>로그아웃</button>
         </div>
       </header>
 
-      <div className="main-container">
+      <div className={`main-container ${isMobile ? 'mobile-view' : ''}`}>
         <div className="game-area">
-          <GameCanvas user={user} />
+          <GameCanvas user={user} isMobile={isMobile} />
         </div>
         
         <aside className="sidebar">
