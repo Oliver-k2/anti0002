@@ -12,6 +12,32 @@ const GameCanvas = ({ user, isMobile }) => {
   const containerRef = useRef(null);
   const [leaderboard, setLeaderboard] = useState([]);
   
+  const [isDead, setIsDead] = useState(false);
+  const [deathReason, setDeathReason] = useState("");
+  const isDeadRef = useRef(false);
+
+  const handleRevive = () => {
+    myPos.current = { 
+      x: Math.floor((Math.random() * WORLD_WIDTH)/TILE_SIZE) * TILE_SIZE, 
+      y: Math.floor((Math.random() * WORLD_HEIGHT)/TILE_SIZE) * TILE_SIZE 
+    };
+    
+    const initBase = {};
+    for(let dy=-1; dy<=1; dy++){
+      for(let dx=-1; dx<=1; dx++){
+         const bx = myPos.current.x + dx*TILE_SIZE;
+         const by = myPos.current.y + dy*TILE_SIZE;
+         initBase[`${bx}_${by}`] = { x: bx, y: by, uid: user.uid, color: user.color, nickname: user.nickname, type: 'base' };
+      }
+    }
+    update(ref(db, 'tiles'), initBase);
+    set(ref(db, `players/${user.uid}`), { uid: user.uid, nickname: user.nickname, color: user.color, x: myPos.current.x, y: myPos.current.y });
+    
+    setIsDead(false);
+    isDeadRef.current = false;
+    setDeathReason("");
+  };
+
   const playersRef = useRef(new Map());
   const tilesRef = useRef(new Map()); 
   const monstersRef = useRef(new Map());
@@ -42,8 +68,11 @@ const GameCanvas = ({ user, isMobile }) => {
     update(ref(db), deathUpdates).catch(console.error);
   };
 
-  const die = () => {
-    alert("사망했습니다!");
+  const die = (reason = "사망했습니다!") => {
+    if (isDeadRef.current) return;
+    setIsDead(true);
+    isDeadRef.current = true;
+    setDeathReason(reason);
     remove(ref(db, `players/${user.uid}`));
     const deathUpdates = {};
     tilesRef.current.forEach((t, k) => {
@@ -185,7 +214,12 @@ const GameCanvas = ({ user, isMobile }) => {
 
     const handlePlayerAdded = snap => playersRef.current.set(snap.key, snap.val());
     const handlePlayerChanged = snap => playersRef.current.set(snap.key, snap.val());
-    const handlePlayerRemoved = snap => playersRef.current.delete(snap.key);
+    const handlePlayerRemoved = snap => {
+       playersRef.current.delete(snap.key);
+       if (snap.key === user.uid && !isDeadRef.current) {
+          die("상대방의 영토에 완전히 가두어졌습니다!");
+       }
+    };
     
     onChildAdded(ref(db, 'players'), handlePlayerAdded);
     onChildChanged(ref(db, 'players'), handlePlayerChanged);
@@ -306,6 +340,10 @@ const GameCanvas = ({ user, isMobile }) => {
 
     let moveRaf;
     const moveLoop = () => {
+      if (isDeadRef.current) {
+        moveRaf = setTimeout(moveLoop, 60);
+        return;
+      }
       let moved = false;
       const speed = user.isAdmin ? TILE_SIZE * 3 : TILE_SIZE;
       const newPos = { ...myPos.current };
@@ -324,16 +362,11 @@ const GameCanvas = ({ user, isMobile }) => {
 
           let amIInBase = (nextTile && nextTile.uid === user.uid && nextTile.type === 'base');
           
-          if (nextTile && nextTile.type === 'trail') {
-             if (nextTile.uid === user.uid) { die(); return; }
-             else killPlayer(nextTile.uid);
-          }
-
           let hitMonster = false;
           monstersRef.current.forEach(m => {
              if (Math.abs(m.x - newPos.x) < TILE_SIZE && Math.abs(m.y - newPos.y) < TILE_SIZE) hitMonster = true;
           });
-          if (hitMonster) { die(); return; }
+          if (hitMonster) { die("몬스터와 충돌했습니다!"); return; }
 
           if (!amIInBase) {
              paintTile(newPos.x, newPos.y, 'trail');
@@ -508,8 +541,17 @@ const GameCanvas = ({ user, isMobile }) => {
           </p>
         </div>
       )}
+      {isDead && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
+          <h1 style={{ color: '#ef4444', fontSize: isMobile ? '3rem' : '4rem', margin: 0, textShadow: '0 0 20px rgba(239, 68, 68, 0.5)' }}>YOU DIED</h1>
+          <p style={{ color: '#fff', fontSize: '1.2rem', marginTop: '10px', marginBottom: '30px' }}>{deathReason}</p>
+          <button onClick={handleRevive} style={{ padding: '16px 32px', fontSize: '1.2rem', background: '#3b82f6', color: 'white', borderRadius: '12px', border: 'none', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)' }}>
+            다시 시작하기 (부활)
+          </button>
+        </div>
+      )}
     </div>
   );
 };
 
-export default memo(GameCanvas);
+export default GameCanvas;

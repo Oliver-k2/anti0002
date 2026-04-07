@@ -6,11 +6,12 @@ import Chat from './components/Chat';
 import './index.css';
 
 const PALETTE_COLORS = Array.from({ length: 100 }, (_, i) => {
-  // 황금각(137.508도)을 활용하여 100개의 색상이 한 번도 겹치지 않고 고르게 분산되도록 합니다.
-  const hue = Math.round((i * 137.508) % 360); 
-  const lightness = 55 + (i % 5) * 5; // 55% ~ 75%의 안정적인 밝기
-  const saturation = 75 + (i % 3) * 10; // 75%, 85%, 95%의 선명한 채도
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  // 20종류의 완전히 다른 명확한 색상값(Hue)을 18도 단위로 나눔
+  const hue = (i % 20) * 18;
+  // 5단계의 명도(Lightness)를 적용하여 같은 배색이라도 밝기로 완전히 구분함
+  const lightnessIndex = Math.floor(i / 20); 
+  const lightness = 40 + (lightnessIndex * 10); // 40%, 50%, 60%, 70%, 80%
+  return `hsl(${hue}, 85%, ${lightness}%)`;
 });
 
 function App() {
