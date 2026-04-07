@@ -221,8 +221,9 @@ button.danger {
 
 .mobile-view .sidebar {
   width: 100%;
-  height: 200px;
-  flex-direction: row;
+  flex: 0 0 35vh;
+  min-height: 200px;
+  flex-direction: column;
   padding: 0 8px 8px 8px;
 }
 
@@ -245,4 +246,15 @@ button.danger {
 .device-toggle button.active {
   background: var(--accent);
   color: white;
+}
+
+/* Prevent context menu and selection on canvas */
+canvas {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
