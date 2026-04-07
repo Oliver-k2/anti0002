@@ -35,12 +35,81 @@ const GameCanvas = ({ user, isMobile }) => {
     }, 100)
   ).current;
 
+  const checkEnclosure = useRef(
+    throttle(() => {
+      if (user.isAdmin) return;
+      const MAX_X = Math.ceil(WORLD_WIDTH / TILE_SIZE) + 2;
+      const MAX_Y = Math.ceil(WORLD_HEIGHT / TILE_SIZE) + 2;
+      const R = MAX_Y + 2;
+      const C = MAX_X + 2;
+      const grid = new Uint8Array(R * C); 
+      
+      const getIdx = (x, y) => y * C + x;
+
+      tilesRef.current.forEach((tile, key) => {
+        if (tile.uid === user.uid) {
+          const [sx, sy] = key.split('_');
+          const gx = Math.round(parseInt(sx, 10) / TILE_SIZE);
+          const gy = Math.round(parseInt(sy, 10) / TILE_SIZE);
+          if (gx >= 0 && gx < MAX_X && gy >= 0 && gy < MAX_Y) {
+            grid[getIdx(gx + 1, gy + 1)] = 1;
+          }
+        }
+      });
+
+      const queue = new Int32Array(R * C * 2);
+      let head = 0;
+      let tail = 0;
+
+      queue[tail++] = 0;
+      queue[tail++] = 0;
+      grid[getIdx(0, 0)] = 2;
+
+      while(head < tail) {
+        const cx = queue[head++];
+        const cy = queue[head++];
+
+        if (cx > 0 && grid[getIdx(cx - 1, cy)] === 0) { grid[getIdx(cx - 1, cy)] = 2; queue[tail++] = cx - 1; queue[tail++] = cy; }
+        if (cx < C - 1 && grid[getIdx(cx + 1, cy)] === 0) { grid[getIdx(cx + 1, cy)] = 2; queue[tail++] = cx + 1; queue[tail++] = cy; }
+        if (cy > 0 && grid[getIdx(cx, cy - 1)] === 0) { grid[getIdx(cx, cy - 1)] = 2; queue[tail++] = cx; queue[tail++] = cy - 1; }
+        if (cy < R - 1 && grid[getIdx(cx, cy + 1)] === 0) { grid[getIdx(cx, cy + 1)] = 2; queue[tail++] = cx; queue[tail++] = cy + 1; }
+      }
+
+      const updates = {};
+      let enclosedCount = 0;
+
+      for (let y = 0; y < MAX_Y; y++) {
+        for (let x = 0; x < MAX_X; x++) {
+          if (grid[getIdx(x + 1, y + 1)] === 0) {
+            const realX = x * TILE_SIZE;
+            const realY = y * TILE_SIZE;
+            if (realX > WORLD_WIDTH || realY > WORLD_HEIGHT) continue;
+            
+            const tileKey = `${realX}_${realY}`;
+            const existing = tilesRef.current.get(tileKey);
+            if (!existing || existing.uid !== user.uid) {
+              const newTile = { uid: user.uid, color: user.color, nickname: user.nickname };
+              updates[tileKey] = newTile;
+              tilesRef.current.set(tileKey, newTile);
+              enclosedCount++;
+            }
+          }
+        }
+      }
+
+      if (enclosedCount > 0) {
+        update(ref(db, 'tiles'), updates).catch(console.error);
+      }
+    }, 500, { leading: false, trailing: true })
+  ).current;
+
   const paintTile = (x, y) => {
     if (user.isAdmin) return;
     const tileKey = `${x}_${y}`;
     const newTile = { uid: user.uid, color: user.color, nickname: user.nickname };
     tilesRef.current.set(tileKey, newTile);
     update(ref(db, 'tiles'), { [tileKey]: newTile }).catch(console.error);
+    checkEnclosure();
   };
 
   useEffect(() => {
