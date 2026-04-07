@@ -153,10 +153,14 @@ const GameCanvas = ({ user, isMobile }) => {
 
   useEffect(() => {
     let myPlayerRef = null;
+    let myApprovalRef = null;
     if (!user.isAdmin) {
       myPlayerRef = ref(db, `players/${user.uid}`);
       set(myPlayerRef, { uid: user.uid, nickname: user.nickname, color: user.color, x: myPos.current.x, y: myPos.current.y });
       onDisconnect(myPlayerRef).remove();
+
+      myApprovalRef = ref(db, `approvals/${user.uid}`);
+      onDisconnect(myApprovalRef).remove();
 
       const initBase = {};
       for(let dy=-1; dy<=1; dy++){
@@ -227,7 +231,10 @@ const GameCanvas = ({ user, isMobile }) => {
     onChildChanged(ref(db, 'monsters'), snap => monstersRef.current.set(snap.key, { id: snap.key, ...snap.val() }));
     onChildRemoved(ref(db, 'monsters'), snap => monstersRef.current.delete(snap.key));
 
-    return () => { if (myPlayerRef) remove(myPlayerRef); };
+    return () => { 
+      if (myPlayerRef) remove(myPlayerRef); 
+      if (myApprovalRef) remove(myApprovalRef);
+    };
   }, [user.uid, user.isAdmin]);
 
   useEffect(() => {
