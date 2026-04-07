@@ -53,7 +53,7 @@ const GameCanvas = ({ user, isMobile }) => {
   };
 
   const checkEnclosure = useRef(
-    throttle(() => {
+    () => {
       if (user.isAdmin) return;
       const MAX_X = Math.ceil(WORLD_WIDTH / TILE_SIZE) + 2;
       const MAX_Y = Math.ceil(WORLD_HEIGHT / TILE_SIZE) + 2;
@@ -123,8 +123,18 @@ const GameCanvas = ({ user, isMobile }) => {
          if (updates[`${mx}_${my}`]) remove(ref(db, `monsters/${m.id}`));
       });
 
-      if (enclosedCount > 0) update(ref(db, 'tiles'), updates).catch(console.error);
-    }, 300, { leading: false, trailing: true })
+      if (enclosedCount > 0) {
+         Object.keys(updates).forEach(k => {
+           tilesRef.current.set(k, updates[k]);
+           if (worldCanvasRef.current) {
+             const wctx = worldCanvasRef.current.getContext('2d');
+             wctx.fillStyle = updates[k].color;
+             wctx.fillRect(updates[k].x, updates[k].y, TILE_SIZE, TILE_SIZE);
+           }
+         });
+         update(ref(db, 'tiles'), updates).catch(console.error);
+      }
+    }
   ).current;
 
   const paintTile = (x, y, type) => {
