@@ -355,12 +355,29 @@ const GameCanvas = ({ user, isMobile }) => {
       else if ((keys['d'] || keys['ArrowRight']) && newPos.x < WORLD_WIDTH - TILE_SIZE) { newPos.x += speed; moved = true; }
 
       if (moved) {
-        myPos.current = newPos;
         if (!user.isAdmin) {
           const nextTileKey = `${newPos.x}_${newPos.y}`;
           const nextTile = tilesRef.current.get(nextTileKey);
-
           let amIInBase = (nextTile && nextTile.uid === user.uid && nextTile.type === 'base');
+
+          if (!amIInBase) {
+             let trailCount = 0;
+             let amITreadingOwnTrail = false;
+             tilesRef.current.forEach(t => {
+                if (t.uid === user.uid && t.type === 'trail') {
+                   trailCount++;
+                   if (t.x === newPos.x && t.y === newPos.y) amITreadingOwnTrail = true;
+                }
+             });
+             
+             // 100칸 도달 시 내 꼬리가 아닌 길(새로운 길)로는 이동 불가 (왔던 길로만 가능)
+             if (trailCount >= 100 && !amITreadingOwnTrail) {
+                 moveRaf = setTimeout(moveLoop, 60);
+                 return;
+             }
+          }
+
+          myPos.current = newPos;
           
           let hitMonster = false;
           monstersRef.current.forEach(m => {
