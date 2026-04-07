@@ -13,12 +13,11 @@ function App() {
   const [resetTime, setResetTime] = useState(null);
   const [timeLeft, setTimeLeft] = useState('00:00:00');
   
-  // 관리자 비밀번호 관련 상태
-  const [adminPassword, setAdminPassword] = useState(''); // DB에 저장된 비번
-  const [passwordInput, setPasswordInput] = useState(''); // 입력창 비번
+  const [adminPassword, setAdminPassword] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [isPasswordSet, setIsPasswordSet] = useState(false);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
-  const [newPassword, setNewPassword] = useState(''); // 신규 설정 비번
+  const [newPassword, setNewPassword] = useState('');
 
   useEffect(() => {
     const configRef = ref(db, 'config/resetTimer');
@@ -26,7 +25,6 @@ function App() {
       if (snapshot.exists()) {
         setResetTime(snapshot.val());
       } else {
-        // Initialize if not present (24H later)
         const nextTime = Date.now() + 24 * 60 * 60 * 1000;
         set(ref(db, 'config/resetTimer'), nextTime);
       }
@@ -36,14 +34,11 @@ function App() {
 
   useEffect(() => {
     if (!resetTime) return;
-
     const timer = setInterval(() => {
       const now = Date.now();
       const diff = resetTime - now;
-
       if (diff <= 0) {
         setTimeLeft('00:00:00');
-        // Prevent continuous triggering by checking if it already refreshed
         if (Math.abs(diff) < 5000) { 
           handleResetData();
         }
@@ -54,7 +49,6 @@ function App() {
         setTimeLeft(`${h}:${m}:${s}`);
       }
     }, 1000);
-
     return () => clearInterval(timer);
   }, [resetTime]);
 
@@ -70,7 +64,6 @@ function App() {
   };
 
   useEffect(() => {
-    // 관리자 비밀번호 설정 여부 확인
     const adminRef = ref(db, 'admin_config');
     onValue(adminRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -128,7 +121,6 @@ function App() {
       if (isPasswordSet) {
         setShowPasswordPrompt(true);
       } else {
-        // 비밀번호가 없으면 바로 입장
         setAdminMode(true);
       }
       return;
@@ -177,65 +169,74 @@ function App() {
     remove(ref(db, `approvals/${uid}`));
   };
 
-  // 관리자 모드
   const adminUser = { uid: 'admin_uid', nickname: '관리자', isAdmin: true, status: 'approved', color: '#ff0000' };
 
+  // 관리자 모드 UI
   if (adminMode) {
     return (
-      <div style={{ color: 'white', padding: 20, width: '100%', maxWidth: 1200, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20, height: '100vh', boxSizing: 'border-box' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>관리자 제어판 🛠️ (리셋까지: {timeLeft})</h2>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={handleResetData} style={{ backgroundColor: '#ef4444' }}>즉시 리셋 💣</button>
+      <div id="root">
+        <header className="app-header">
+          <div className="app-title">
+            <span>🛠️ 관리자 제어판</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>리셋까지 남은 시간</span>
+              <strong style={{ fontSize: '1.1rem', letterSpacing: 1 }}>{timeLeft}</strong>
+            </div>
+            <button onClick={handleResetData} className="danger">즉시 리셋 💣</button>
             <button onClick={() => { setAdminMode(false); setInputName(''); }} className="secondary">로그아웃</button>
           </div>
-        </div>
+        </header>
 
-        <div style={{ display: 'flex', gap: 20, flex: 1, minHeight: 0 }}>
-          <div style={{ width: '350px', display: 'flex', flexDirection: 'column', gap: 20, overflowY: 'auto' }}>
-            {/* 비밀번호 설정 구역 */}
-            <div className="panel" style={{ padding: 20 }}>
-              <h3 style={{ marginBottom: 15 }}>비밀번호 관리</h3>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <input 
-                  type="password" 
-                  placeholder="새 비밀번호 입력" 
-                  value={newPassword} 
-                  onChange={e => setNewPassword(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button onClick={updateAdminPassword}>저장</button>
-              </div>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 8 }}>
-                {isPasswordSet ? '비밀번호 설정됨' : '비밀번호 미설정 (권장)'}
-              </p>
-            </div>
-
-            {/* 승인 대기열 */}
-            <div className="panel" style={{ padding: 20 }}>
-              <h3 style={{ marginBottom: 15 }}>접속 승인 대기열 ({pendingUsers.length})</h3>
-              {pendingUsers.length === 0 ? <p>대기 중인 사용자가 없습니다.</p> : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {pendingUsers.map(u => (
-                    <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-color)', padding: 8, borderRadius: 8, border: '1px solid var(--border-color)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 12, height: 12, background: u.color, borderRadius: '50%' }}></div>
-                        <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{u.nickname}</span>
-                      </div>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button onClick={() => approveUser(u.uid)} style={{ padding: '6px 10px', fontSize: '0.8rem' }}>승인</button>
-                        <button onClick={() => rejectUser(u.uid)} className="secondary" style={{ backgroundColor: '#ef4444', padding: '6px 10px', fontSize: '0.8rem' }}>거절</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ flex: 1, display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border-color)', position: 'relative' }}>
+        <div className="main-container">
+          <div className="game-area">
             <GameCanvas user={adminUser} />
           </div>
+          
+          <aside className="sidebar">
+            <div className="panel" style={{ flex: 'none' }}>
+              <div className="panel-header">
+                <span>비밀번호 관리</span>
+              </div>
+              <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input 
+                  type="password" 
+                  placeholder="새 비밀번호" 
+                  value={newPassword} 
+                  onChange={e => setNewPassword(e.target.value)}
+                />
+                <button onClick={updateAdminPassword}>설정 저장</button>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  {isPasswordSet ? '✅ 현재 비밀번호가 설정되어 있습니다.' : '⚠️ 비밀번호가 설정되지 않았습니다.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="panel" style={{ flex: 1 }}>
+              <div className="panel-header">
+                <span>접속 승인 대기 ({pendingUsers.length})</span>
+              </div>
+              <div style={{ padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {pendingUsers.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 20 }}>대기중인 유저가 없습니다.</p>
+                ) : (
+                  pendingUsers.map(u => (
+                    <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 12, height: 12, background: u.color, borderRadius: '50%', boxShadow: `0 0 8px ${u.color}` }}></div>
+                        <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>{u.nickname}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={() => approveUser(u.uid)} style={{ padding: '6px 12px', fontSize: '0.8rem' }}>승인</button>
+                        <button onClick={() => rejectUser(u.uid)} className="danger" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>거절</button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     );
@@ -244,19 +245,20 @@ function App() {
   // 관리자 비밀번호 입력 폼
   if (showPasswordPrompt) {
     return (
-      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center' }}>
-        <form onSubmit={handlePasswordSubmit} style={{ background: 'var(--panel-bg)', padding: 40, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 20, width: 320, boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
-          <h2 style={{ textAlign: 'center', color: 'white' }}>관리자 인증</h2>
-          <input 
-            type="password" 
-            placeholder="비밀번호를 입력하세요" 
-            value={passwordInput} 
-            onChange={e => setPasswordInput(e.target.value)} 
-            autoFocus 
-            style={{ padding: '12px 16px', fontSize: '1rem' }}
-          />
-          <button type="submit" style={{ padding: '12px', fontSize: '1rem', fontWeight: 'bold' }}>입장하기</button>
-          <button type="button" onClick={() => setShowPasswordPrompt(false)} className="secondary">취소</button>
+      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
+        <form onSubmit={handlePasswordSubmit} className="panel" style={{ padding: 32, width: 340, gap: 24 }}>
+          <h2 style={{ textAlign: 'center', fontWeight: 800 }}>관리자 인증</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <input 
+              type="password" 
+              placeholder="비밀번호 입력" 
+              value={passwordInput} 
+              onChange={e => setPasswordInput(e.target.value)} 
+              autoFocus 
+            />
+            <button type="submit" style={{ width: '100%' }}>입장하기</button>
+            <button type="button" onClick={() => setShowPasswordPrompt(false)} className="secondary" style={{ width: '100%' }}>취소</button>
+          </div>
         </form>
       </div>
     );
@@ -265,18 +267,23 @@ function App() {
   // 일반 로그인 폼
   if (!user) {
     return (
-      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center' }}>
-        <form onSubmit={handleLogin} style={{ background: 'var(--panel-bg)', padding: 40, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 20, width: 320, boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
-          <h2 style={{ textAlign: 'center', color: 'white', marginBottom: 10 }}>🔥 픽셀 땅따먹기 🔥</h2>
-          <input 
-            type="text" 
-            placeholder="닉네임 입력 (관리자로 가려면 '관리자' 입력)" 
-            value={inputName} 
-            onChange={e => setInputName(e.target.value)} 
-            autoFocus 
-            style={{ padding: '12px 16px', fontSize: '1rem' }}
-          />
-          <button type="submit" style={{ padding: '12px', fontSize: '1rem', fontWeight: 'bold' }}>접속 요청하기</button>
+      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
+        <form onSubmit={handleLogin} className="panel" style={{ padding: 40, width: 360, gap: 24 }}>
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={{ fontSize: '2rem', marginBottom: 8, background: 'linear-gradient(to right, #60a5fa, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>PIXEL WARS</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>픽셀로 영토를 확장하세요!</p>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <input 
+              type="text" 
+              placeholder="닉네임 입력" 
+              value={inputName} 
+              onChange={e => setInputName(e.target.value)} 
+              autoFocus 
+            />
+            <button type="submit" style={{ width: '100%', padding: 14, fontSize: '1rem' }}>접속 요청하기</button>
+          </div>
+          <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>관리자 승인 후 입장이 가능합니다.</p>
         </form>
       </div>
     );
@@ -285,25 +292,46 @@ function App() {
   // 대기 화면
   if (user.status === 'pending') {
     return (
-      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center' }}>
-        <div style={{ background: 'var(--panel-bg)', padding: 40, borderRadius: 12, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
-          <h2>관리자 승인 대기중 ⏳</h2>
-          <p style={{ color: 'var(--text-muted)', marginTop: 16 }}>관리자가 승인하면 게임이 자동으로 시작됩니다.</p>
+      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
+        <div className="panel" style={{ padding: 48, textAlign: 'center', width: 400, gap: 20 }}>
+          <div className="loading-spinner" style={{ width: 40, height: 40, border: '4px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--accent)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }}></div>
+          <h2>승인 대기 중...</h2>
+          <p style={{ color: 'var(--text-muted)' }}>관리자가 확인 중입니다. 잠시만 기다려주세요.</p>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
     );
   }
 
-  // 게임 실행
+  // 정규 게임 플레이 화면
   return (
     <div id="root">
-      {/* 화면 우측 상단이나 헤더에 떠있는 시간 박스 */}
-      <div style={{ position: 'absolute', top: 20, zIndex: 100, left: '50%', transform: 'translateX(-50%)', background: 'rgba(30,41,59,0.8)', padding: '8px 16px', borderRadius: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.5)', border: '1px solid var(--border-color)', backdropFilter: 'blur(4px)' }}>
-        <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>리셋 타이머 ⏳</span>
-        <strong style={{ marginLeft: 8, color: 'white', letterSpacing: 1 }}>{timeLeft}</strong>
+      <header className="app-header">
+        <div className="app-title">
+          <div style={{ width: 24, height: 24, background: user.color, borderRadius: 4, boxShadow: `0 0 12px ${user.color}` }}></div>
+          <span>PIXEL WARS</span>
+        </div>
+        
+        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(255,255,255,0.05)', padding: '6px 16px', borderRadius: 20, border: '1px solid var(--border-color)' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>리셋까지</span>
+          <strong style={{ fontSize: '1rem', color: 'white', fontFamily: 'monospace' }}>{timeLeft}</strong>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>접속 중: <strong>{user.nickname}</strong></span>
+          <button onClick={() => window.location.reload()} className="secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>로그아웃</button>
+        </div>
+      </header>
+
+      <div className="main-container">
+        <div className="game-area">
+          <GameCanvas user={user} />
+        </div>
+        
+        <aside className="sidebar">
+          <Chat user={user} />
+        </aside>
       </div>
-      <GameCanvas user={user} />
-      <Chat user={user} />
     </div>
   );
 }

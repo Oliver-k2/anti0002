@@ -1,100 +1,95 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
-import { ref, push, onValue, serverTimestamp } from 'firebase/database';
+import React, { useState, useEffect, useRef } from 'react';
+import { ref, push, onValue, limitToLast, query } from 'firebase/database';
 import { db } from '../firebase';
 
 const Chat = ({ user }) => {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
-  const [ip, setIp] = useState('0.0.0.0');
-  const messagesEndRef = useRef(null);
+  const chatEndRef = useRef(null);
 
-  // 접속 시 공인 IP 가져오기
   useEffect(() => {
-    fetch('https://api.ipify.org?format=json')
-      .then(res => res.json())
-      .then(data => {
-        // IP 마스킹 (ex: 121.162.xx.xx)
-        const parts = data.ip.split('.');
-        if (parts.length === 4) {
-          setIp(`${parts[0]}.${parts[1]}.${parts[2]}.**`);
-        } else {
-          setIp(data.ip);
-        }
-      })
-      .catch(err => console.error('IP fetching error:', err));
-  }, []);
-
-  // 채팅 리스트 실시간 동기화
-  useEffect(() => {
-    const chatRef = ref(db, 'chat');
+    const chatRef = query(ref(db, 'chat'), limitToLast(50));
     const unsubscribe = onValue(chatRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const msgList = Object.keys(data).map(key => ({
-          id: key,
-          ...data[key]
-        })).sort((a, b) => a.timestamp - b.timestamp);
-        
-        // 너무 많은 채팅 유지 방지 (최근 100개만 표시)
-        setMessages(msgList.slice(-100));
+      if (snapshot.exists()) {
+        setMessages(Object.values(snapshot.val()));
       } else {
         setMessages([]);
       }
     });
+
     return () => unsubscribe();
   }, []);
 
-  // 자동 스크롤
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = (e) => {
+  const sendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
-    push(ref(db, 'chat'), {
+    const newMessage = {
       uid: user.uid,
       nickname: user.nickname,
-      ip: ip,
+      color: user.color,
       text: inputText,
-      timestamp: serverTimestamp(),
-      color: user.color
-    });
+      timestamp: Date.now()
+    };
+
+    push(ref(db, 'chat'), newMessage);
     setInputText('');
   };
 
   return (
-    <div className="panel" style={{ gridArea: 'chat' }}>
-      <div className="panel-header">실시간 채팅</div>
-      <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
-        {messages.map(msg => (
-          <div key={msg.id} style={{ marginBottom: 8 }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85em', marginRight: 4 }}>
-              [{msg.ip}]
-            </span>
-            <strong style={{ color: msg.color || 'var(--text-main)', marginRight: 6 }}>
-              {msg.nickname}:
-            </strong>
-            <span style={{ wordBreak: 'break-word', lineHeight: 1.4 }}>{msg.text}</span>
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
+    <div className="panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div className="panel-header">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>💬 실시간 채팅</span>
       </div>
-      <div style={{ padding: 16, borderTop: '1px solid var(--border-color)', background: 'var(--bg-color)' }}>
-        <form onSubmit={handleSend} style={{ display: 'flex', gap: 8 }}>
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="메시지를 입력하세요..."
-            style={{ flex: 1 }}
+      
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {messages.length === 0 ? (
+          <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 20 }}>아직 메시지거 없습니다.</p>
+        ) : (
+          messages.map((msg, idx) => (
+            <div key={idx} style={{ animation: 'fadeIn 0.3s ease' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                <span style={{ fontWeight: 800, fontSize: '0.8rem', color: msg.color }}>{msg.nickname}</span>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <div style={{ 
+                background: msg.uid === user.uid ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255,255,255,0.05)', 
+                padding: '8px 12px', 
+                borderRadius: '0 12px 12px 12px', 
+                fontSize: '0.9rem', 
+                lineHeight: '1.4',
+                border: '1px solid rgba(255,255,255,0.05)',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}>
+                {msg.text}
+              </div>
+            </div>
+          ))
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      <form onSubmit={sendMessage} style={{ padding: 12, borderTop: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.1)' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input 
+            type="text" 
+            placeholder="메시지 입력..." 
+            value={inputText} 
+            onChange={(e) => setInputText(e.target.value)} 
+            style={{ flex: 1, background: 'rgba(0,0,0,0.2)', height: 40 }}
           />
-          <button type="submit">전송</button>
-        </form>
-      </div>
+          <button type="submit" style={{ height: 40, width: 60, padding: 0 }}>전송</button>
+        </div>
+      </form>
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }`}</style>
     </div>
   );
 };
 
-export default memo(Chat);
+export default Chat;
