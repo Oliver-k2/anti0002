@@ -129,8 +129,6 @@ const GameCanvas = ({ user, isMobile }) => {
       if (moved) {
         myPos.current = newPos;
         if (!user.isAdmin) {
-          keys['w'] = keys['s'] = keys['a'] = keys['d'] = false;
-          keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
           paintTile(newPos.x, newPos.y);
           syncPositionToFirebase(newPos);
         }
@@ -318,20 +316,20 @@ const GameCanvas = ({ user, isMobile }) => {
       />
       
       {/* Floating Leaderboard */}
-      <div className="panel" style={{ position: 'absolute', top: isMobile ? 8 : 16, right: isMobile ? 8 : 16, width: isMobile ? 160 : 200, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
-        <div className="panel-header" style={{ padding: '10px 16px', fontSize: '0.85rem' }}>
+      <div className="panel" style={{ position: 'absolute', top: isMobile ? 8 : 16, right: isMobile ? 8 : 16, width: isMobile ? 140 : 200, pointerEvents: 'none', background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
+        <div className="panel-header" style={{ padding: isMobile ? '6px 10px' : '10px 16px', fontSize: isMobile ? '0.75rem' : '0.85rem' }}>
           <span>실시간 순위 🏆</span>
         </div>
-        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ padding: isMobile ? 8 : 12, display: 'flex', flexDirection: 'column', gap: isMobile ? 6 : 8 }}>
           {leaderboard.length === 0 ? <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>데이터 없음</p> : 
             leaderboard.map((u, idx) => (
               <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '70%' }}>
-                  <span style={{ fontSize: '0.8rem', opacity: 0.7, fontWeight: 'bold' }}>{idx + 1}</span>
-                  <div style={{ minWidth: 8, height: 8, background: u.color, borderRadius: 2 }}></div>
-                  <span style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nickname}</span>
+                  <span style={{ fontSize: isMobile ? '0.7rem' : '0.8rem', opacity: 0.7, fontWeight: 'bold' }}>{idx + 1}</span>
+                  <div style={{ minWidth: isMobile ? 6 : 8, height: isMobile ? 6 : 8, background: u.color, borderRadius: 2 }}></div>
+                  <span style={{ fontSize: isMobile ? '0.75rem' : '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nickname}</span>
                 </div>
-                <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{u.count}</span>
+                <span style={{ fontSize: isMobile ? '0.75rem' : '0.85rem', fontWeight: 'bold' }}>{u.count}</span>
               </div>
             ))
           }
