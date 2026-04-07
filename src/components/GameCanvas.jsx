@@ -386,9 +386,12 @@ const GameCanvas = ({ user, isMobile }) => {
       });
 
       monstersRef.current.forEach(m => {
-          ctx.fillStyle = '#ff0000';
-          ctx.shadowBlur = 10; ctx.shadowColor = '#ff0000';
-          ctx.fillRect(m.x - 2, m.y - 2, TILE_SIZE + 4, TILE_SIZE + 4);
+          ctx.fillStyle = '#ff00ff';
+          ctx.shadowBlur = 15; 
+          ctx.shadowColor = '#ff00ff';
+          ctx.fillRect(m.x - 3, m.y - 3, TILE_SIZE + 6, TILE_SIZE + 6);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(m.x, m.y, TILE_SIZE, TILE_SIZE);
           ctx.shadowBlur = 0;
       });
 

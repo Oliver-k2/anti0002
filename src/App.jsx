@@ -99,8 +99,10 @@ function App() {
     updates['chat'] = null;
     updates['players'] = null;
     updates['tiles'] = null;
+    updates['approvals'] = null;
+    updates['monsters'] = null;
     update(ref(db), updates).catch(console.error);
-    alert('맵과 채팅 데이터가 리셋되었습니다!');
+    alert('맵, 유저, 채팅 및 대기열 데이터가 완벽히 리셋되었습니다!');
   };
 
   useEffect(() => {
