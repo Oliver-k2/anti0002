@@ -10,6 +10,7 @@ function App() {
   const [inputName, setInputName] = useState('');
   const [adminMode, setAdminMode] = useState(false);
   const [pendingUsers, setPendingUsers] = useState([]);
+  const [activeUsers, setActiveUsers] = useState([]);
   const [resetTime, setResetTime] = useState(null);
   const [timeLeft, setTimeLeft] = useState('00:00:00');
   
@@ -80,8 +81,9 @@ function App() {
     });
 
     if (adminMode) {
+      // 승인 대기열 리스너
       const approvalsRef = ref(db, 'approvals');
-      const unsubscribe = onValue(approvalsRef, (snapshot) => {
+      const unsubscribeApprovals = onValue(approvalsRef, (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.val();
           const pending = Object.values(data).filter(u => u.status === 'pending');
@@ -90,22 +92,43 @@ function App() {
           setPendingUsers([]);
         }
       });
-      return () => unsubscribe();
+
+      // 현재 접속자 리스너
+      const playersRef = ref(db, 'players');
+      const unsubscribePlayers = onValue(playersRef, (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const active = Object.values(data);
+          setActiveUsers(active);
+        } else {
+          setActiveUsers([]);
+        }
+      });
+
+      return () => {
+        unsubscribeApprovals();
+        unsubscribePlayers();
+      };
     }
   }, [adminMode]);
 
   useEffect(() => {
-    if (user && user.status === 'pending') {
+    if (user) {
       const userRef = ref(db, `approvals/${user.uid}`);
       const unsubscribe = onValue(userRef, (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.val();
-          if (data.status === 'approved') {
+          if (user.status === 'pending' && data.status === 'approved') {
             setUser(prev => ({ ...prev, status: 'approved' }));
           }
         } else {
+          // 유저 데이터가 삭제된 경우 (강퇴 또는 거절)
           setUser(null);
-          alert("접속이 거절되었습니다.");
+          if (user.status === 'approved') {
+            alert("관리자에 의해 강제 퇴장되었습니다.");
+          } else {
+            alert("접속이 거절되었습니다.");
+          }
         }
       });
       return () => unsubscribe();
@@ -169,9 +192,15 @@ function App() {
     remove(ref(db, `approvals/${uid}`));
   };
 
+  const kickUser = (uid) => {
+    if (window.confirm("정말 강퇴하시겠습니까?")) {
+      remove(ref(db, `players/${uid}`));
+      remove(ref(db, `approvals/${uid}`));
+    }
+  };
+
   const adminUser = { uid: 'admin_uid', nickname: '관리자', isAdmin: true, status: 'approved', color: '#ff0000' };
 
-  // 관리자 모드 UI
   if (adminMode) {
     return (
       <div id="root">
@@ -213,24 +242,45 @@ function App() {
               </div>
             </div>
 
-            <div className="panel" style={{ flex: 1 }}>
+            <div className="panel" style={{ flex: 1, minHeight: 0 }}>
               <div className="panel-header">
-                <span>접속 승인 대기 ({pendingUsers.length})</span>
+                <span>승인 대기 ({pendingUsers.length})</span>
               </div>
-              <div style={{ padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ padding: 12, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {pendingUsers.length === 0 ? (
-                  <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 20 }}>대기중인 유저가 없습니다.</p>
+                  <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>대기중인 유저가 없습니다.</p>
                 ) : (
                   pendingUsers.map(u => (
-                    <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-color)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 12, height: 12, background: u.color, borderRadius: '50%', boxShadow: `0 0 8px ${u.color}` }}></div>
-                        <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>{u.nickname}</span>
+                    <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '50%' }}>
+                        <div style={{ width: 10, height: 10, background: u.color, borderRadius: '50%' }}></div>
+                        <span style={{ fontWeight: '600', fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nickname}</span>
                       </div>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button onClick={() => approveUser(u.uid)} style={{ padding: '6px 12px', fontSize: '0.8rem' }}>승인</button>
-                        <button onClick={() => rejectUser(u.uid)} className="danger" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>거절</button>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button onClick={() => approveUser(u.uid)} style={{ padding: '4px 8px', fontSize: '0.75rem' }}>승인</button>
+                        <button onClick={() => rejectUser(u.uid)} className="danger" style={{ padding: '4px 8px', fontSize: '0.75rem' }}>거절</button>
                       </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="panel" style={{ flex: 1, minHeight: 0 }}>
+              <div className="panel-header" style={{ color: 'var(--success)' }}>
+                <span>현재 접속자 ({activeUsers.length})</span>
+              </div>
+              <div style={{ padding: 12, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {activeUsers.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>접속 중인 유저가 없습니다.</p>
+                ) : (
+                  activeUsers.map(u => (
+                    <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '60%' }}>
+                        <div style={{ width: 10, height: 10, background: u.color, borderRadius: '50%', boxShadow: `0 0 5px ${u.color}` }}></div>
+                        <span style={{ fontWeight: '600', fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nickname}</span>
+                      </div>
+                      <button onClick={() => kickUser(u.uid)} className="danger" style={{ padding: '4px 8px', fontSize: '0.75rem', backgroundColor: 'transparent', border: '1px solid var(--danger)', color: 'var(--danger)' }}>강퇴</button>
                     </div>
                   ))
                 )}
@@ -242,7 +292,6 @@ function App() {
     );
   }
 
-  // 관리자 비밀번호 입력 폼
   if (showPasswordPrompt) {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
@@ -264,7 +313,6 @@ function App() {
     );
   }
 
-  // 일반 로그인 폼
   if (!user) {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
@@ -289,7 +337,6 @@ function App() {
     );
   }
 
-  // 대기 화면
   if (user.status === 'pending') {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-color)' }}>
@@ -303,7 +350,6 @@ function App() {
     );
   }
 
-  // 정규 게임 플레이 화면
   return (
     <div id="root">
       <header className="app-header">
