@@ -6,9 +6,10 @@ import Chat from './components/Chat';
 import './index.css';
 
 const PALETTE_COLORS = Array.from({ length: 100 }, (_, i) => {
-  const hue = (i % 10) * 36;
-  const lightness = 20 + Math.floor(i / 10) * 6; // 20% to 74%
-  return `hsl(${hue}, 80%, ${lightness}%)`;
+  const hue = (i * 36) % 360; // 0~360
+  const lightness = 45 + ((Math.floor(i / 10) * 11) % 40); // 45% ~ 84% 밝은 톤
+  const saturation = 70 + (i % 3) * 10; // 70%, 80%, 90% 채도
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 });
 
 function App() {
@@ -398,7 +399,9 @@ function App() {
                       if (!isUsed) setSelectedColor(color);
                     }}
                     title={isUsed ? "사용중" : "선택 가능"}
-                  ></div>
+                  >
+                    {isUsed && <span style={{color: 'rgba(255,255,255,0.7)', fontSize: '1.2rem', fontWeight: 'bold'}}>&times;</span>}
+                  </div>
                 );
               })}
             </div>
