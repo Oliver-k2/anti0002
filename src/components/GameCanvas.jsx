@@ -1,569 +1,430 @@
-import React, { useRef, useEffect, useState, memo } from 'react';
-import { ref, onChildAdded, onChildChanged, onChildRemoved, onDisconnect, set, update, remove, get } from 'firebase/database';
+import React, { useRef, useEffect, useState } from 'react';
+import { ref, set, onValue, update } from 'firebase/database';
 import { db } from '../firebase';
-import { throttle } from 'lodash';
 
-const TILE_SIZE = 12; 
-const WORLD_WIDTH = 2500;
-const WORLD_HEIGHT = 2000;
+const CANVAS_W = 800;
+const CANVAS_H = 600;
+const TILE = 5;
+const COLS = CANVAS_W / TILE;
+const ROWS = CANVAS_H / TILE;
+const TOTAL_PLAYABLE_AREA = (COLS - 4) * (ROWS - 4); // 패딩 제외 면적
+
+const images = ["/bg1.png", "/bg2.png"];
 
 const GameCanvas = ({ user, isMobile }) => {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [leaderboard, setLeaderboard] = useState([]);
-  
-  const [isDead, setIsDead] = useState(false);
-  const [deathReason, setDeathReason] = useState("");
-  const isDeadRef = useRef(false);
+  const [gameState, setGameState] = useState('playing'); // playing, dead, clear
+  const [level, setLevel] = useState(1);
+  const [percent, setPercent] = useState(0);
 
-  const handleRevive = () => {
-    myPos.current = { 
-      x: Math.floor((Math.random() * WORLD_WIDTH)/TILE_SIZE) * TILE_SIZE, 
-      y: Math.floor((Math.random() * WORLD_HEIGHT)/TILE_SIZE) * TILE_SIZE 
-    };
+  // 게임 로직에 필요한 가변 상태들 (ref로 관리하여 렌더링 의존성 제거)
+  const grid = useRef(new Uint8Array(COLS * ROWS));
+  const trailRef = useRef([]);
+  const player = useRef({ x: COLS / 2, y: ROWS - 2 }); // 시작 위치 바닥 중앙
+  const bosses = useRef([]);
+  const bgImgRef = useRef(new Image());
+  const keys = useRef({ ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, a: false, s: false, d: false });
+
+  // 초기화 함수
+  const initGame = (targetLevel) => {
+    bgImgRef.current.src = images[(targetLevel - 1) % images.length];
     
-    const initBase = {};
-    for(let dy=-1; dy<=1; dy++){
-      for(let dx=-1; dx<=1; dx++){
-         const bx = myPos.current.x + dx*TILE_SIZE;
-         const by = myPos.current.y + dy*TILE_SIZE;
-         initBase[`${bx}_${by}`] = { x: bx, y: by, uid: user.uid, color: user.color, nickname: user.nickname, type: 'base' };
-      }
-    }
-    update(ref(db, 'tiles'), initBase);
-    set(ref(db, `players/${user.uid}`), { uid: user.uid, nickname: user.nickname, color: user.color, x: myPos.current.x, y: myPos.current.y });
-    
-    setIsDead(false);
-    isDeadRef.current = false;
-    setDeathReason("");
-  };
-
-  const playersRef = useRef(new Map());
-  const tilesRef = useRef(new Map()); 
-  const monstersRef = useRef(new Map());
-
-  const worldCanvasRef = useRef(null);
-
-  const myPos = useRef({ 
-    x: user.isAdmin ? WORLD_WIDTH / 2 : Math.floor((Math.random() * WORLD_WIDTH)/TILE_SIZE) * TILE_SIZE, 
-    y: user.isAdmin ? WORLD_HEIGHT / 2 : Math.floor((Math.random() * WORLD_HEIGHT)/TILE_SIZE) * TILE_SIZE 
-  });
-
-  const keysRef = useRef({ ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, a: false, s: false, d: false });
-
-  const syncPositionToFirebase = useRef(
-    throttle((pos) => {
-      update(ref(db, `players/${user.uid}`), { 
-        uid: user.uid, nickname: user.nickname, color: user.color, x: pos.x, y: pos.y 
-      }).catch(() => {});
-    }, 100)
-  ).current;
-
-  const killPlayer = (targetUid) => {
-    const deathUpdates = {};
-    tilesRef.current.forEach((t, k) => {
-      if (t.uid === targetUid) deathUpdates[`tiles/${k}`] = null;
-    });
-    deathUpdates[`players/${targetUid}`] = null;
-    update(ref(db), deathUpdates).catch(console.error);
-  };
-
-  const die = (reason = "사망했습니다!") => {
-    if (isDeadRef.current) return;
-    setIsDead(true);
-    isDeadRef.current = true;
-    setDeathReason(reason);
-    remove(ref(db, `players/${user.uid}`));
-    const deathUpdates = {};
-    tilesRef.current.forEach((t, k) => {
-      if (t.uid === user.uid) deathUpdates[k] = null;
-    });
-    update(ref(db, 'tiles'), deathUpdates);
-  };
-
-  const checkEnclosure = useRef(
-    () => {
-      if (user.isAdmin) return;
-      const MAX_X = Math.ceil(WORLD_WIDTH / TILE_SIZE) + 2;
-      const MAX_Y = Math.ceil(WORLD_HEIGHT / TILE_SIZE) + 2;
-      const R = MAX_Y + 2;
-      const C = MAX_X + 2;
-      const grid = new Uint8Array(R * C); 
-      const getIdx = (x, y) => y * C + x;
-
-      tilesRef.current.forEach(tile => {
-        if (tile.uid === user.uid) {
-          const gx = Math.round(tile.x / TILE_SIZE);
-          const gy = Math.round(tile.y / TILE_SIZE);
-          if (gx >= 0 && gx < MAX_X && gy >= 0 && gy < MAX_Y) {
-            grid[getIdx(gx + 1, gy + 1)] = 1;
-          }
-        }
-      });
-
-      const queue = new Int32Array(R * C * 2);
-      let head = 0, tail = 0;
-      queue[tail++] = 0; queue[tail++] = 0;
-      grid[getIdx(0, 0)] = 2;
-
-      while(head < tail) {
-        const cx = queue[head++]; const cy = queue[head++];
-        if (cx > 0 && grid[getIdx(cx - 1, cy)] === 0) { grid[getIdx(cx - 1, cy)] = 2; queue[tail++] = cx - 1; queue[tail++] = cy; }
-        if (cx < C - 1 && grid[getIdx(cx + 1, cy)] === 0) { grid[getIdx(cx + 1, cy)] = 2; queue[tail++] = cx + 1; queue[tail++] = cy; }
-        if (cy > 0 && grid[getIdx(cx, cy - 1)] === 0) { grid[getIdx(cx, cy - 1)] = 2; queue[tail++] = cx; queue[tail++] = cy - 1; }
-        if (cy < R - 1 && grid[getIdx(cx, cy + 1)] === 0) { grid[getIdx(cx, cy + 1)] = 2; queue[tail++] = cx; queue[tail++] = cy + 1; }
-      }
-
-      const updates = {};
-      let enclosedCount = 0;
-
-      tilesRef.current.forEach((t, k) => {
-         if (t.uid === user.uid && t.type === 'trail') {
-            updates[k] = { uid: user.uid, color: user.color, nickname: user.nickname, type: 'base', x: t.x, y: t.y };
-            enclosedCount++;
-         }
-      });
-
-      for (let y = 0; y < MAX_Y; y++) {
-        for (let x = 0; x < MAX_X; x++) {
-          if (grid[getIdx(x + 1, y + 1)] === 0) {
-            const realX = x * TILE_SIZE; const realY = y * TILE_SIZE;
-            if (realX > WORLD_WIDTH || realY > WORLD_HEIGHT) continue;
-            const tileKey = `${realX}_${realY}`;
-            const existing = tilesRef.current.get(tileKey);
-            if (!existing || existing.uid !== user.uid) {
-              updates[tileKey] = { uid: user.uid, color: user.color, nickname: user.nickname, type: 'base', x: realX, y: realY };
-              enclosedCount++;
-            }
-          }
+    const g = new Uint8Array(COLS * ROWS);
+    // 테두리 2칸씩 Base(1)로 설정
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (r <= 1 || r >= ROWS - 2 || c <= 1 || c >= COLS - 2) {
+          g[r * COLS + c] = 1;
         }
       }
-
-      playersRef.current.forEach(p => {
-         if (p.uid !== user.uid && !p.isAdmin) {
-            const pk = `${p.x}_${p.y}`;
-            if (updates[pk]) killPlayer(p.uid);
-         }
-      });
-
-      monstersRef.current.forEach(m => {
-         const mx = Math.round(m.x / TILE_SIZE) * TILE_SIZE;
-         const my = Math.round(m.y / TILE_SIZE) * TILE_SIZE;
-         if (updates[`${mx}_${my}`]) remove(ref(db, `monsters/${m.id}`));
-      });
-
-      if (enclosedCount > 0) {
-         Object.keys(updates).forEach(k => {
-           tilesRef.current.set(k, updates[k]);
-           if (worldCanvasRef.current) {
-             const wctx = worldCanvasRef.current.getContext('2d');
-             wctx.fillStyle = updates[k].color;
-             wctx.fillRect(updates[k].x, updates[k].y, TILE_SIZE, TILE_SIZE);
-           }
-         });
-         update(ref(db, 'tiles'), updates).catch(console.error);
-      }
     }
-  ).current;
-
-  const paintTile = (x, y, type) => {
-    if (user.isAdmin) return;
-    const tileKey = `${x}_${y}`;
-    const newTile = { uid: user.uid, color: user.color, nickname: user.nickname, type, x, y };
-    update(ref(db, 'tiles'), { [tileKey]: newTile }).catch(console.error);
-  };
-
-  useEffect(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = WORLD_WIDTH;
-    canvas.height = WORLD_HEIGHT;
-    worldCanvasRef.current = canvas;
-
-    const handleResize = () => {
-      if (canvasRef.current && containerRef.current) {
-        canvasRef.current.width = containerRef.current.clientWidth;
-        canvasRef.current.height = containerRef.current.clientHeight;
-      }
-    };
-    window.addEventListener('resize', handleResize);
-    setTimeout(handleResize, 100);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [isMobile]);
-
-  useEffect(() => {
-    let myPlayerRef = null;
-    let myApprovalRef = null;
-    if (!user.isAdmin) {
-      myPlayerRef = ref(db, `players/${user.uid}`);
-      set(myPlayerRef, { uid: user.uid, nickname: user.nickname, color: user.color, x: myPos.current.x, y: myPos.current.y });
-      onDisconnect(myPlayerRef).remove();
-
-      myApprovalRef = ref(db, `approvals/${user.uid}`);
-      onDisconnect(myApprovalRef).remove();
-
-      const initBase = {};
-      for(let dy=-1; dy<=1; dy++){
-        for(let dx=-1; dx<=1; dx++){
-           const bx = myPos.current.x + dx*TILE_SIZE;
-           const by = myPos.current.y + dy*TILE_SIZE;
-           initBase[`${bx}_${by}`] = { x: bx, y: by, uid: user.uid, color: user.color, nickname: user.nickname, type: 'base' };
-        }
-      }
-      update(ref(db, 'tiles'), initBase);
-    }
-
-    const handlePlayerAdded = snap => playersRef.current.set(snap.key, snap.val());
-    const handlePlayerChanged = snap => playersRef.current.set(snap.key, snap.val());
-    const handlePlayerRemoved = snap => {
-       playersRef.current.delete(snap.key);
-       if (snap.key === user.uid && !isDeadRef.current) {
-          die("상대방의 영토에 완전히 가두어졌습니다!");
-       }
-    };
+    grid.current = g;
+    trailRef.current = [];
+    player.current = { x: COLS / 2, y: ROWS - 2 };
     
-    onChildAdded(ref(db, 'players'), handlePlayerAdded);
-    onChildChanged(ref(db, 'players'), handlePlayerChanged);
-    onChildRemoved(ref(db, 'players'), handlePlayerRemoved);
-
-    const drawToBaseCanvas = (tile) => {
-      if (tile.type === 'base' && worldCanvasRef.current) {
-        const wctx = worldCanvasRef.current.getContext('2d');
-        wctx.fillStyle = tile.color;
-        wctx.fillRect(tile.x, tile.y, TILE_SIZE, TILE_SIZE);
-      }
-    };
-
-    const handleTileAdded = snap => {
-      const tile = snap.val();
-      if(tile.x === undefined) { const [x,y] = snap.key.split('_'); tile.x = parseInt(x); tile.y = parseInt(y); tile.type = 'base'; }
-      tilesRef.current.set(snap.key, tile);
-      drawToBaseCanvas(tile);
-    };
-    const handleTileChanged = snap => {
-      const tile = snap.val();
-      if(tile.x === undefined) { const [x,y] = snap.key.split('_'); tile.x = parseInt(x); tile.y = parseInt(y); tile.type = 'base'; }
-      tilesRef.current.set(snap.key, tile);
-      drawToBaseCanvas(tile);
-    };
-    const handleTileRemoved = snap => {
-      const tile = tilesRef.current.get(snap.key);
-      if(!tile) return;
-      tilesRef.current.delete(snap.key);
-      if (tile.type === 'base' && worldCanvasRef.current) {
-        const wctx = worldCanvasRef.current.getContext('2d');
-        wctx.clearRect(tile.x, tile.y, TILE_SIZE, TILE_SIZE);
-      }
-    };
-    
-    const tilesDbRef = ref(db, 'tiles');
-    get(tilesDbRef).then(snapshot => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        Object.keys(data).forEach(k => {
-          const tile = data[k];
-          if(tile.x === undefined) { const [x,y] = k.split('_'); tile.x = parseInt(x); tile.y = parseInt(y); tile.type = 'base'; }
-          tilesRef.current.set(k, tile);
-          drawToBaseCanvas(tile);
+    // 보스 생성 (레벨에 비례하여 개수나 스피드 증가)
+    const newBosses = [];
+    for (let i = 0; i < Math.min(targetLevel, 5); i++) {
+        newBosses.push({
+            x: (100 + Math.random() * 600),
+            y: (100 + Math.random() * 200),
+            vx: (Math.random() > 0.5 ? 1 : -1) * (2 + targetLevel * 0.5),
+            vy: (Math.random() > 0.5 ? 1 : -1) * (2 + targetLevel * 0.5)
         });
-      }
-      onChildAdded(tilesDbRef, handleTileAdded);
-      onChildChanged(tilesDbRef, handleTileChanged);
-      onChildRemoved(tilesDbRef, handleTileRemoved);
+    }
+    bosses.current = newBosses;
+    setPercent(0);
+    setGameState('playing');
+  };
+
+  useEffect(() => {
+    initGame(level);
+  }, [level]);
+
+  // 리더보드 싱크
+  useEffect(() => {
+    const lbRef = ref(db, 'arcadeLeaderboard');
+    const unsub = onValue(lbRef, (snap) => {
+        const data = snap.val() || {};
+        const sorted = Object.values(data).sort((a, b) => b.level !== a.level ? b.level - a.level : b.score - a.score).slice(0, 5);
+        setLeaderboard(sorted);
     });
-
-    onChildAdded(ref(db, 'monsters'), snap => monstersRef.current.set(snap.key, { id: snap.key, ...snap.val() }));
-    onChildChanged(ref(db, 'monsters'), snap => monstersRef.current.set(snap.key, { id: snap.key, ...snap.val() }));
-    onChildRemoved(ref(db, 'monsters'), snap => monstersRef.current.delete(snap.key));
-
-    return () => { 
-      if (myPlayerRef) remove(myPlayerRef); 
-      if (myApprovalRef) remove(myApprovalRef);
-    };
-  }, [user.uid, user.isAdmin]);
-
-  useEffect(() => {
-     if (!user.isAdmin) return;
-     let interval = setInterval(() => {
-        if (monstersRef.current.size < 5) {
-           const id = 'mon_' + Math.random().toString(36).substr(2,9);
-           const mx = Math.floor(Math.random() * (WORLD_WIDTH / TILE_SIZE)) * TILE_SIZE;
-           const my = Math.floor(Math.random() * (WORLD_HEIGHT / TILE_SIZE)) * TILE_SIZE;
-           const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-           set(ref(db, `monsters/${id}`), { x: mx, y: my, dx: dirs[0][0], dy: dirs[0][1] });
-        }
-        const updates = {};
-        monstersRef.current.forEach(m => {
-            let nextX = m.x + m.dx * TILE_SIZE; 
-            let nextY = m.y + m.dy * TILE_SIZE;
-            if (nextX < 0 || nextX >= WORLD_WIDTH || nextY < 0 || nextY >= WORLD_HEIGHT) {
-                m.dx *= -1; m.dy *= -1;
-            } else {
-                const alignX = Math.round(nextX / TILE_SIZE) * TILE_SIZE;
-                const alignY = Math.round(nextY / TILE_SIZE) * TILE_SIZE;
-                if (tilesRef.current.has(`${alignX}_${alignY}`)) {
-                    const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-                    const newDir = dirs[Math.floor(Math.random()*4)];
-                    m.dx = newDir[0]; m.dy = newDir[1];
-                } else {
-                    m.x = nextX; m.y = nextY;
-                }
-            }
-            updates[`monsters/${m.id}`] = { x: m.x, y: m.y, dx: m.dx, dy: m.dy };
-        });
-        if (Object.keys(updates).length > 0) update(ref(db), updates);
-     }, 150);
-     return () => clearInterval(interval);
-  }, [user.isAdmin]);
-
-  useEffect(() => {
-    const calcLeaderboard = setInterval(() => {
-      const scoreMap = new Map();
-      tilesRef.current.forEach(tile => {
-        if (tile.type !== 'base') return;
-        if (!scoreMap.has(tile.uid)) scoreMap.set(tile.uid, { nickname: tile.nickname, count: 0, color: tile.color });
-        scoreMap.get(tile.uid).count += 1;
-      });
-      const sortedLeaderboard = Array.from(scoreMap.values()).sort((a, b) => b.count - a.count).slice(0, 5);
-      setLeaderboard(sortedLeaderboard);
-    }, 1000);
-    return () => clearInterval(calcLeaderboard);
+    return () => unsub();
   }, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => { 
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-      keysRef.current[e.key] = true; 
-    };
-    const handleKeyUp = (e) => { keysRef.current[e.key] = false; };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+  const updateLeaderboardRecord = (p, lvl) => {
+      const myRecord = { uid: user.uid, nickname: user.nickname, color: user.color, score: Math.round(p), level: lvl };
+      update(ref(db, `arcadeLeaderboard`), { [user.uid]: myRecord });
+  };
 
-    let moveRaf;
-    const moveLoop = () => {
-      if (isDeadRef.current) {
-        moveRaf = setTimeout(moveLoop, 60);
-        return;
-      }
-      let moved = false;
-      const speed = user.isAdmin ? TILE_SIZE * 3 : TILE_SIZE;
-      const newPos = { ...myPos.current };
-      const keys = keysRef.current;
-      
-      if ((keys['w'] || keys['ArrowUp']) && newPos.y > 0) { newPos.y -= speed; moved = true; }
-      else if ((keys['s'] || keys['ArrowDown']) && newPos.y < WORLD_HEIGHT - TILE_SIZE) { newPos.y += speed; moved = true; }
-      else if ((keys['a'] || keys['ArrowLeft']) && newPos.x > 0) { newPos.x -= speed; moved = true; }
-      else if ((keys['d'] || keys['ArrowRight']) && newPos.x < WORLD_WIDTH - TILE_SIZE) { newPos.x += speed; moved = true; }
-
-      if (moved) {
-        if (!user.isAdmin) {
-          const nextTileKey = `${newPos.x}_${newPos.y}`;
-          const nextTile = tilesRef.current.get(nextTileKey);
-          let amIInBase = (nextTile && nextTile.uid === user.uid && nextTile.type === 'base');
-
-          if (!amIInBase) {
-             let trailCount = 0;
-             let amITreadingOwnTrail = false;
-             tilesRef.current.forEach(t => {
-                if (t.uid === user.uid && t.type === 'trail') {
-                   trailCount++;
-                   if (t.x === newPos.x && t.y === newPos.y) amITreadingOwnTrail = true;
-                }
-             });
-             
-             // 100칸 도달 시 내 꼬리가 아닌 길(새로운 길)로는 이동 불가 (왔던 길로만 가능)
-             if (trailCount >= 100 && !amITreadingOwnTrail) {
-                 moveRaf = setTimeout(moveLoop, 60);
-                 return;
-             }
-          }
-
-          myPos.current = newPos;
-          
-          let hitMonster = false;
-          monstersRef.current.forEach(m => {
-             if (Math.abs(m.x - newPos.x) < TILE_SIZE && Math.abs(m.y - newPos.y) < TILE_SIZE) hitMonster = true;
-          });
-          if (hitMonster) { die("몬스터와 충돌했습니다!"); return; }
-
-          if (!amIInBase) {
-             paintTile(newPos.x, newPos.y, 'trail');
-          } else {
-             let haveTrail = false;
-             tilesRef.current.forEach(t => { if(t.uid === user.uid && t.type === 'trail') haveTrail = true; });
-             if (haveTrail) checkEnclosure();
-             else syncPositionToFirebase(newPos);
-          }
-        }
-      }
-      moveRaf = setTimeout(moveLoop, 60);
-    };
-    moveLoop();
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      clearTimeout(moveRaf);
-    };
-  }, [user.isAdmin]);
-
+  // 게임 루프 및 렌더링
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: false });
-    let renderRafId;
 
-    const render = () => {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = '#020617'; 
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const handleKeyDown = (e) => { 
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+        keys.current[e.key] = true; 
+    };
+    const handleKeyUp = (e) => { keys.current[e.key] = false; };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 
-      const cameraX = Math.floor(canvas.width / 2) - myPos.current.x;
-      const cameraY = Math.floor(canvas.height / 2) - myPos.current.y;
-      ctx.translate(cameraX, cameraY);
-      
-      const viewportXLeft = myPos.current.x - canvas.width / 2;
-      const viewportXRight = myPos.current.x + canvas.width / 2;
-      const viewportYTop = myPos.current.y - canvas.height / 2;
-      const viewportYBottom = myPos.current.y + canvas.height / 2;
+    let animationId;
+    let frames = 0;
 
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const fillEnclosed = () => {
+        const temp = new Uint8Array(COLS * ROWS);
+        const q = [];
+        // 보스가 있는 공간은 비어있는(0) 안전한 바다로 인식
+        bosses.current.forEach(b => {
+            const bx = Math.floor(b.x / TILE);
+            const by = Math.floor(b.y / TILE);
+            if (bx >= 0 && bx < COLS && by >= 0 && by < ROWS) {
+                if (grid.current[by * COLS + bx] === 0 || grid.current[by * COLS + bx] === 2) {
+                    temp[by * COLS + bx] = 1;
+                    q.push({x: bx, y: by});
+                }
+            }
+        });
 
-      if (worldCanvasRef.current) {
-        ctx.drawImage(worldCanvasRef.current, 0, 0);
-      }
-
-      tilesRef.current.forEach((tile) => {
-        if (tile.type === 'trail') {
-          if (tile.x + TILE_SIZE >= viewportXLeft && tile.x <= viewportXRight && tile.y + TILE_SIZE >= viewportYTop && tile.y <= viewportYBottom) {
-            ctx.globalAlpha = 0.6;
-            ctx.fillStyle = tile.color;
-            ctx.fillRect(tile.x + 2, tile.y + 2, TILE_SIZE - 4, TILE_SIZE - 4); 
-            ctx.globalAlpha = 1.0;
-          }
+        // 큐를 써서 DFS/BFS 전파 (Flood Fill)
+        let head = 0;
+        while(head < q.length) {
+            const p = q[head++];
+            const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+            for (let d of dirs) {
+                const nx = p.x + d[0]; const ny = p.y + d[1];
+                if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
+                    // 보스가 지나는 길이기 때문에 해당 0은 채우지 않음(살려둠)
+                    if (grid.current[ny * COLS + nx] === 0 && temp[ny * COLS + nx] === 0) {
+                        temp[ny * COLS + nx] = 1;
+                        q.push({x: nx, y: ny});
+                    }
+                }
+            }
         }
-      });
 
-      monstersRef.current.forEach(m => {
-          ctx.fillStyle = '#ff00ff';
-          ctx.shadowBlur = 15; 
-          ctx.shadowColor = '#ff00ff';
-          ctx.fillRect(m.x - 3, m.y - 3, TILE_SIZE + 6, TILE_SIZE + 6);
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(m.x, m.y, TILE_SIZE, TILE_SIZE);
-          ctx.shadowBlur = 0;
-      });
+        let baseCount = 0;
+        for (let i = 0; i < COLS * ROWS; i++) {
+            if (grid.current[i] === 2) {
+                grid.current[i] = 1; // 꼬리를 땅으로 편입
+            } else if (grid.current[i] === 0 && temp[i] === 0) {
+                grid.current[i] = 1; // 갇힌 공간을 내 땅으로 편입!
+            }
+            if (grid.current[i] === 1) baseCount++;
+        }
 
-      playersRef.current.forEach((player) => {
-        if (player.x + TILE_SIZE < viewportXLeft || player.x > viewportXRight || player.y + TILE_SIZE < viewportYTop || player.y > viewportYBottom) return;
-        ctx.shadowBlur = 10; ctx.shadowColor = player.color;
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(player.x - 1, player.y - 1, TILE_SIZE + 2, TILE_SIZE + 2);
-        ctx.fillStyle = player.color; ctx.fillRect(player.x, player.y, TILE_SIZE, TILE_SIZE);
-        ctx.shadowBlur = 0;
-        ctx.font = 'bold 12px Outfit, sans-serif'; ctx.textAlign = 'center';
-        const textWidth = ctx.measureText(player.nickname).width;
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)'; ctx.fillRect(player.x + TILE_SIZE / 2 - textWidth / 2 - 6, player.y - 22, textWidth + 12, 16);
-        ctx.fillStyle = 'white'; ctx.fillText(player.nickname, player.x + TILE_SIZE / 2, player.y - 10);
-      });
+        const currentPct = (baseCount / TOTAL_PLAYABLE_AREA) * 100;
+        setPercent(currentPct);
+        updateLeaderboardRecord(currentPct, level);
 
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      
-      const minimapSize = isMobile ? 120 : 180;
-      const minimapScale = minimapSize / Math.max(WORLD_WIDTH, WORLD_HEIGHT);
-      const padding = isMobile ? 12 : 24;
-      const mmX = padding;
-      const mmY = canvas.height - minimapSize - padding;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(mmX, mmY, minimapSize, minimapSize, 12);
-      ctx.clip();
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-      ctx.fillRect(mmX, mmY, minimapSize, minimapSize);
-
-      if (worldCanvasRef.current) {
-        ctx.drawImage(worldCanvasRef.current, 0, 0, WORLD_WIDTH, WORLD_HEIGHT, mmX, mmY, minimapSize, minimapSize);
-      }
-      
-      playersRef.current.forEach((player) => {
-        ctx.fillStyle = player.color; ctx.beginPath();
-        ctx.arc(mmX + player.x * minimapScale, mmY + player.y * minimapScale, 3, 0, Math.PI * 2);
-        ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
-      });
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 1;
-      const vpW = canvas.width * minimapScale; const vpH = canvas.height * minimapScale;
-      ctx.strokeRect(mmX + viewportXLeft * minimapScale, mmY + viewportYTop * minimapScale, vpW, vpH);
-      
-      ctx.restore();
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-      ctx.strokeRect(mmX, mmY, minimapSize, minimapSize);
-
-      renderRafId = requestAnimationFrame(render);
+        if (currentPct >= 75) {
+            setGameState('clear');
+        }
     };
 
-    renderRafId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(renderRafId);
-  }, [isMobile]);
+    const looseGame = () => {
+        setGameState('dead');
+        // 죽는 이펙트를 위해 꼬리를 빨갛게 표시 등 가능
+    };
+
+    const loop = () => {
+        if (gameState !== 'playing') {
+            animationId = requestAnimationFrame(loop);
+            return;
+        }
+
+        // --- 물리 업데이트 ---
+        // 플레이어 이동 속도 (초당 60프레임 기준 TILE 사이즈만큼)
+        // 1칸씩 정밀 제어를 위해 프레임 카운터를 써도 좋고, 여기선 간단히 1frame=1px가 아닌 1칸씩 이동
+        let p = player.current;
+        let targetX = p.x; let targetY = p.y;
+        
+        // 이동 키 판별
+        if (keys.current.ArrowUp || keys.current.w) targetY -= 1;
+        else if (keys.current.ArrowDown || keys.current.s) targetY += 1;
+        else if (keys.current.ArrowLeft || keys.current.a) targetX -= 1;
+        else if (keys.current.ArrowRight || keys.current.d) targetX += 1;
+
+        // 화면 밖으로 나가지 못함
+        if (targetX < 0) targetX = 0;
+        if (targetX >= COLS) targetX = COLS - 1;
+        if (targetY < 0) targetY = 0;
+        if (targetY >= ROWS) targetY = ROWS - 1;
+
+        if (targetX !== p.x || targetY !== p.y) {
+            const targetIdx = targetY * COLS + targetX;
+            const targetType = grid.current[targetIdx];
+
+            if (targetType === 0) { // 바다로 전진
+                // 시작 꼬리 기록
+                trailRef.current.push({ x: p.x, y: p.y });
+                // 꼬리 그리기 (현재 위치)
+                grid.current[p.y * COLS + p.x] = 2;
+                player.current = { x: targetX, y: targetY };
+            } 
+            else if (targetType === 2) { // 꼬리와 충돌
+                const trail = trailRef.current;
+                // 이전 꼬리인지(후진) 판별
+                if (trail.length > 0 && trail[trail.length - 1].x === targetX && trail[trail.length - 1].y === targetY) {
+                    // 뒤로 가기 (꼬리 깎기)
+                    grid.current[p.y * COLS + p.x] = 0; // 지우기
+                    trail.pop(); // 한칸 지움
+                    player.current = { x: targetX, y: targetY };
+                } else {
+                    // 내 꼬리를 밟아서 사망
+                    looseGame();
+                }
+            } 
+            else if (targetType === 1) { // 베이스에 안전하게 착륙!
+                if (trailRef.current.length > 0) {
+                    grid.current[p.y * COLS + p.x] = 2; // 막틱 채우고
+                    player.current = { x: targetX, y: targetY };
+                    trailRef.current = [];
+                    // 영역 채우기 로직 발동
+                    fillEnclosed();
+                } else {
+                    // 꼬리 없이 베이스 위를 주행 중
+                    player.current = { x: targetX, y: targetY };
+                }
+            }
+        }
+
+        // 보스 이동 및 충돌
+        bosses.current.forEach(boss => {
+            boss.x += boss.vx;
+            boss.y += boss.vy;
+
+            // 바운싱 로직 (벽(base)에 부딪히면 튕김)
+            const bGridX = Math.floor(boss.x / TILE);
+            const bGridY = Math.floor(boss.y / TILE);
+            
+            if (bGridX >= 0 && bGridX < COLS && bGridY >= 0 && bGridY < ROWS) {
+                if (grid.current[bGridY * COLS + bGridX] === 1) {
+                    // 정밀한 반사를 위해 이전 위치 활용
+                    const prevX = Math.floor((boss.x - boss.vx) / TILE);
+                    const prevY = Math.floor((boss.y - boss.vy) / TILE);
+                    if (grid.current[bGridY * COLS + prevX] === 1) boss.vy *= -1.05; // 약간 속도 증가
+                    else if (grid.current[prevY * COLS + bGridX] === 1) boss.vx *= -1.05;
+                    else { boss.vx *= -1; boss.vy *= -1; }
+                } 
+                else if (grid.current[bGridY * COLS + bGridX] === 2) {
+                    // 꼬리를 자름 -> 사망!
+                    looseGame();
+                }
+            } else {
+                boss.vx *= -1; boss.vy *= -1; // 맵 밖으로 나가면
+            }
+        });
+
+        // 플레이어 본체 몸통박치기 체크
+        if (trailRef.current.length > 0) {
+           bosses.current.forEach(boss => {
+              const bGridX = Math.floor(boss.x / TILE);
+              const bGridY = Math.floor(boss.y / TILE);
+              if (bGridX === player.current.x && bGridY === player.current.y) looseGame();
+           });
+        }
+
+        // --- 렌더링 ---
+        // 1. 고해상도 백그라운드 뿌리기
+        if (bgImgRef.current.complete) {
+            ctx.drawImage(bgImgRef.current, 0, 0, CANVAS_W, CANVAS_H);
+        } else {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        }
+
+        // 2. 안먹은 구역(0) 검은색 칠하기 (가리기)
+        ctx.fillStyle = '#000000';
+        for(let r=0; r<ROWS; r++) {
+            let startC = -1;
+            for(let c=0; c<COLS; c++) {
+                if (grid.current[r*COLS + c] === 0) {
+                    if (startC === -1) startC = c;
+                } else {
+                    if (startC !== -1) {
+                        ctx.fillRect(startC * TILE, r * TILE, (c - startC) * TILE, TILE);
+                        startC = -1;
+                    }
+                }
+            }
+            if (startC !== -1) ctx.fillRect(startC * TILE, r * TILE, (COLS - startC) * TILE, TILE);
+        }
+
+        // 3. 꼬리 및 외곽선 테두리 이펙트
+        ctx.fillStyle = '#ef4444'; // 꼬리
+        for(let r=0; r<ROWS; r++) {
+             for(let c=0; c<COLS; c++) {
+                 if (grid.current[r*COLS + c] === 2) {
+                     ctx.shadowBlur = 10; ctx.shadowColor = '#ef4444';
+                     ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+                     ctx.shadowBlur = 0;
+                 }
+             }
+        }
+
+        // 4. 플레이어
+        ctx.fillStyle = user.color || '#3b82f6';
+        ctx.shadowBlur = 15; ctx.shadowColor = user.color || '#3b82f6';
+        const px = player.current.x * TILE; const py = player.current.y * TILE;
+        ctx.fillRect(px - 2, py - 2, TILE + 4, TILE + 4);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px, py, TILE, TILE);
+        ctx.shadowBlur = 0;
+
+        // 5. 보스
+        bosses.current.forEach(boss => {
+            ctx.fillStyle = '#eab308';
+            ctx.shadowBlur = 20; ctx.shadowColor = '#facc15';
+            ctx.beginPath();
+            ctx.arc(boss.x, boss.y, TILE * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        });
+
+        // 6. 스캐터 이펙트나 그리드 라인을 약간 (옵션)
+        ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+        ctx.strokeRect(0, 0, CANVAS_W, CANVAS_H);
+
+        animationId = requestAnimationFrame(loop);
+    };
+
+    animationId = requestAnimationFrame(loop);
+    
+    return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('keyup', handleKeyUp);
+        cancelAnimationFrame(animationId);
+    };
+  }, [gameState, level]);
+
+  // 비율에 맞게 스케일링 설정
+  const getScale = () => {
+    if (!containerRef.current) return 1;
+    const { clientWidth, clientHeight } = containerRef.current;
+    const scaleX = clientWidth / CANVAS_W;
+    const scaleY = clientHeight / CANVAS_H;
+    return Math.min(scaleX, scaleY) * 0.95; // 패딩을 위해 95%
+  };
+
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const rs = () => setScale(getScale());
+    window.addEventListener('resize', rs);
+    setTimeout(rs, 100);
+    return () => window.removeEventListener('resize', rs);
+  }, []);
 
   const handleTouch = (e) => {
-    if (!isMobile || user.isAdmin) return;
+    if (!isMobile) return;
     if (e.cancelable) e.preventDefault(); 
     if (e.type === 'touchend' || e.touches.length === 0) {
-      keysRef.current.w = keysRef.current.s = keysRef.current.a = keysRef.current.d = false;
+      keys.current.w = keys.current.s = keys.current.a = keys.current.d = false;
       return;
     }
     const touch = e.touches[0];
     const rect = canvasRef.current.getBoundingClientRect();
     const x = touch.clientX - rect.left; const y = touch.clientY - rect.top;
     const dx = x - rect.width / 2; const dy = y - rect.height / 2;
-    keysRef.current.w = keysRef.current.s = keysRef.current.a = keysRef.current.d = false;
+    keys.current.w = keys.current.s = keys.current.a = keys.current.d = false;
 
     if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > 0) keysRef.current.d = true; else keysRef.current.a = true;
+      if (dx > 0) keys.current.d = true; else keys.current.a = true;
     } else {
-      if (dy > 0) keysRef.current.s = true; else keysRef.current.w = true;
+      if (dy > 0) keys.current.s = true; else keys.current.w = true;
     }
   };
 
   return (
-    <div ref={containerRef} style={{ flex: 1, backgroundColor: '#000', overflow: 'hidden', position: 'relative' }}>
-      <canvas ref={canvasRef} style={{ display: 'block', outline: 'none', touchAction: 'none' }} tabIndex={0}
-        onTouchStart={handleTouch} onTouchMove={handleTouch} onTouchEnd={handleTouch} onTouchCancel={handleTouch} />
-      <div className="panel" style={{ position: 'absolute', top: isMobile ? 8 : 16, right: isMobile ? 8 : 16, width: isMobile ? 140 : 200, pointerEvents: 'none', background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
-        <div className="panel-header" style={{ padding: isMobile ? '6px 10px' : '10px 16px', fontSize: isMobile ? '0.75rem' : '0.85rem' }}>
-          <span>실시간 순위 🏆</span>
+    <div ref={containerRef} style={{ flex: 1, backgroundColor: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+      
+      {/* 백그라운드 효과 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', background: 'radial-gradient(circle at center, transparent 40%, #020617 100%)' }}></div>
+      
+      <div style={{ position: 'absolute', top: 10, left: 20, zIndex: 10 }}>
+         <h2 style={{ color: 'white', margin: 0, textShadow: '0 2px 10px rgba(0,0,0,0.5)' }}>STAGE {level}</h2>
+         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 5 }}>
+            <div style={{ width: 200, height: 16, background: '#1e293b', borderRadius: 8, overflow: 'hidden', border: '1px solid #334155' }}>
+                <div style={{ width: `${Math.min(percent, 75)*(100/75)}%`, height: '100%', background: 'linear-gradient(90deg, #3b82f6, #06b6d4)', transition: 'width 0.3s' }}></div>
+            </div>
+            <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>{percent.toFixed(1)}% / 75.0%</span>
+         </div>
+      </div>
+
+      <div className="panel" style={{ position: 'absolute', top: 16, right: 16, width: 200, pointerEvents: 'none', background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(10px)' }}>
+        <div className="panel-header" style={{ padding: '8px 12px', fontSize: '0.8rem' }}>
+          <span>아케이드 랭킹 🏆</span>
         </div>
-        <div style={{ padding: isMobile ? 8 : 12, display: 'flex', flexDirection: 'column', gap: isMobile ? 6 : 8 }}>
-          {leaderboard.length === 0 ? <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>데이터 없음</p> : 
-            leaderboard.map((u, idx) => (
-              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '70%' }}>
-                  <span style={{ fontSize: isMobile ? '0.7rem' : '0.8rem', opacity: 0.7, fontWeight: 'bold' }}>{idx + 1}</span>
-                  <div style={{ minWidth: isMobile ? 6 : 8, height: isMobile ? 6 : 8, background: u.color, borderRadius: 2 }}></div>
-                  <span style={{ fontSize: isMobile ? '0.75rem' : '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nickname}</span>
-                </div>
-                <span style={{ fontSize: isMobile ? '0.75rem' : '0.85rem', fontWeight: 'bold' }}>{u.count}</span>
+        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {leaderboard.map((u, idx) => (
+            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '70%' }}>
+                <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>{idx + 1}</span>
+                <span style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: u.uid === user.uid ? '#38bdf8' : 'white' }}>{u.nickname}</span>
               </div>
-            ))
-          }
+              <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#10b981' }}>Lv.{u.level}</span>
+            </div>
+          ))}
         </div>
       </div>
-      {!user.isAdmin && (
-        <div style={{ position: 'absolute', bottom: isMobile ? 12 : 24, right: isMobile ? 12 : 24, pointerEvents: 'none', textAlign: 'right' }}>
-          <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 2 }}>
-            {isMobile ? 'Touch screen to move' : 'Arrow Keys or WASD to Move'}
-          </p>
+
+      {/* 캔버스 래퍼 (안티앨리어싱 없애기 위해 렌더링 최적화) */}
+      <canvas 
+          ref={canvasRef} 
+          width={CANVAS_W} 
+          height={CANVAS_H} 
+          style={{ 
+              transform: `scale(${scale})`, 
+              boxShadow: '0 0 40px rgba(56, 189, 248, 0.4)',
+              border: '2px solid rgba(56, 189, 248, 0.5)',
+              borderRadius: 4,
+              outline: 'none', touchAction: 'none'
+          }} 
+          tabIndex={0}
+          onTouchStart={handleTouch} onTouchMove={handleTouch} onTouchEnd={handleTouch} onTouchCancel={handleTouch}
+      />
+
+      {gameState === 'dead' && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
+          <h1 style={{ color: '#ef4444', fontSize: '4rem', margin: 0, textShadow: '0 0 20px rgba(239, 68, 68, 0.5)' }}>GAME OVER</h1>
+          <p style={{ color: '#fff', fontSize: '1.2rem', marginTop: '10px', marginBottom: '30px' }}>스테이지 {level}에서 {percent.toFixed(1)}% 달성</p>
+          <button onClick={() => initGame(1)} style={{ padding: '16px 32px', fontSize: '1.2rem', background: '#3b82f6', color: 'white', borderRadius: '12px', border: 'none', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)' }}>
+            처음부터 다시하기
+          </button>
         </div>
       )}
-      {isDead && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <h1 style={{ color: '#ef4444', fontSize: isMobile ? '3rem' : '4rem', margin: 0, textShadow: '0 0 20px rgba(239, 68, 68, 0.5)' }}>YOU DIED</h1>
-          <p style={{ color: '#fff', fontSize: '1.2rem', marginTop: '10px', marginBottom: '30px' }}>{deathReason}</p>
-          <button onClick={handleRevive} style={{ padding: '16px 32px', fontSize: '1.2rem', background: '#3b82f6', color: 'white', borderRadius: '12px', border: 'none', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)' }}>
-            다시 시작하기 (부활)
+
+      {gameState === 'clear' && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(16, 185, 129, 0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
+          <h1 style={{ color: '#fff', fontSize: '4rem', margin: 0, textShadow: '0 0 20px rgba(255, 255, 255, 0.5)' }}>STAGE CLEAR!</h1>
+          <p style={{ color: '#fff', fontSize: '1.2rem', marginTop: '10px', marginBottom: '30px' }}>멋지게 땅을 차지했습니다!</p>
+          <button onClick={() => setLevel(l => l + 1)} style={{ padding: '16px 32px', fontSize: '1.2rem', background: '#0f172a', color: 'white', borderRadius: '12px', border: 'none', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)' }}>
+            다음 스테이지로
           </button>
         </div>
       )}
